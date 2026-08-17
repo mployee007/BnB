@@ -37,6 +37,18 @@
   ],
   "cards": [
     {
+      "id": "card-243cbba5-55ca-4d27-a535-63b3a64ad6e1",
+      "title": "Owner discovery call",
+      "company": "Blue Harbor Homes",
+      "contact": "founder@blueharborhomes.com",
+      "value": "$1,800/mo",
+      "priority": "high",
+      "notes": "Verification card after origin setup. Confirms automatic commit + push path is live.",
+      "columnId": "proposal",
+      "createdAt": "2026-08-17T17:49:31.687Z",
+      "updatedAt": "2026-08-17T17:49:31.687Z"
+    },
+    {
       "id": "card-776d9229-23ab-4d7b-a3f6-d3bdfea6120d",
       "title": "Launch pricing audit package",
       "company": "Skyline Suites",
