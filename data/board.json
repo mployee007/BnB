@@ -50,7 +50,7 @@
     },
     {
       "id": "card-seed-1",
-      "columnId": "new-leads",
+      "columnId": "proposal",
       "title": "Boutique host portfolio in Austin",
       "company": "Lakeview Stays",
       "contact": "owner@lakeviewstays.com",
@@ -58,7 +58,7 @@
       "priority": "high",
       "notes": "Sent intro email for co-hosting + guest ops support. Ask for current occupancy and review pain points.",
       "createdAt": "2026-08-17T00:00:00.000Z",
-      "updatedAt": "2026-08-17T00:00:00.000Z"
+      "updatedAt": "2026-08-17T17:48:23.294Z"
     },
     {
       "id": "card-seed-2",
