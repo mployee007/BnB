@@ -49,18 +49,6 @@
       "updatedAt": "2026-08-17T17:49:52.219Z"
     },
     {
-      "id": "card-776d9229-23ab-4d7b-a3f6-d3bdfea6120d",
-      "title": "Launch pricing audit package",
-      "company": "Skyline Suites",
-      "contact": "hello@skylinesuites.com",
-      "value": "$2,400/mo",
-      "priority": "medium",
-      "notes": "Prepare ADR, pricing benchmarks, and operating recommendations for a 30-day revenue tune-up.",
-      "columnId": "new-leads",
-      "createdAt": "2026-08-17T17:45:32.223Z",
-      "updatedAt": "2026-08-17T17:49:50.928Z"
-    },
-    {
       "id": "card-seed-1",
       "columnId": "proposal",
       "title": "Boutique host portfolio in Austin",
@@ -71,6 +59,18 @@
       "notes": "Sent intro email for co-hosting + guest ops support. Ask for current occupancy and review pain points.",
       "createdAt": "2026-08-17T00:00:00.000Z",
       "updatedAt": "2026-08-17T17:48:23.294Z"
+    },
+    {
+      "id": "card-776d9229-23ab-4d7b-a3f6-d3bdfea6120d",
+      "title": "Launch pricing audit package",
+      "company": "Skyline Suites",
+      "contact": "hello@skylinesuites.com",
+      "value": "$2,400/mo",
+      "priority": "medium",
+      "notes": "Prepare ADR, pricing benchmarks, and operating recommendations for a 30-day revenue tune-up.",
+      "columnId": "active-clients",
+      "createdAt": "2026-08-17T17:45:32.223Z",
+      "updatedAt": "2026-08-17T17:57:58.047Z"
     },
     {
       "id": "card-seed-2",
