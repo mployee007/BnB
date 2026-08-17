@@ -55,10 +55,10 @@
       "contact": "hello@skylinesuites.com",
       "value": "$2,400/mo",
       "priority": "medium",
-      "notes": "Test card added during verification. Confirm board persists and git sync runs.",
+      "notes": "Prepare ADR, pricing benchmarks, and operating recommendations for a 30-day revenue tune-up.",
       "columnId": "new-leads",
       "createdAt": "2026-08-17T17:45:32.223Z",
-      "updatedAt": "2026-08-17T17:45:32.223Z"
+      "updatedAt": "2026-08-17T17:49:50.928Z"
     },
     {
       "id": "card-seed-1",
