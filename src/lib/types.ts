@@ -39,3 +39,13 @@ export type CreateCardInput = {
 };
 
 export type UpdateCardInput = Partial<CreateCardInput>;
+
+export type ReorderCardPosition = {
+  id: string;
+  columnId: string;
+};
+
+export type ReorderCardsInput = {
+  cards: ReorderCardPosition[];
+  movedCardId?: string;
+};

@@ -1,14 +1,43 @@
 "use client";
 
+import {
+  DndContext,
+  DragEndEvent,
+  DragOverlay,
+  DragStartEvent,
+  PointerSensor,
+  useDroppable,
+  useSensor,
+  useSensors,
+} from "@dnd-kit/core";
+import {
+  SortableContext,
+  rectSortingStrategy,
+  useSortable,
+} from "@dnd-kit/sortable";
+import { CSS } from "@dnd-kit/utilities";
 import { useMemo, useState } from "react";
 
-import type { BoardData, Card, Column, CreateCardInput, Priority } from "@/lib/types";
+import type {
+  BoardData,
+  Card,
+  Column,
+  CreateCardInput,
+  Priority,
+  ReorderCardPosition,
+} from "@/lib/types";
 
 type BoardClientProps = {
   initialBoard: BoardData;
 };
 
 type DraftCard = CreateCardInput;
+
+type DragMeta = {
+  type: "card" | "column";
+  cardId?: string;
+  columnId: string;
+};
 
 const emptyDraft: DraftCard = {
   title: "",
@@ -34,13 +63,78 @@ function formatDate(value: string) {
   }).format(new Date(value));
 }
 
+function getCardsForColumn(board: BoardData, columnId: string) {
+  return board.cards.filter((card) => card.columnId === columnId);
+}
+
+function reorderBoardCards(
+  board: BoardData,
+  activeCardId: string,
+  overMeta: DragMeta
+): BoardData {
+  const activeCard = board.cards.find((card) => card.id === activeCardId);
+
+  if (!activeCard) {
+    return board;
+  }
+
+  const targetColumnId = overMeta.type === "column" ? overMeta.columnId : overMeta.columnId;
+  const remainingCards = board.cards.filter((card) => card.id !== activeCardId);
+
+  const grouped = new Map(
+    board.columns.map((column) => [
+      column.id,
+      remainingCards.filter((card) => card.columnId === column.id),
+    ])
+  );
+
+  const targetCards = [...(grouped.get(targetColumnId) ?? [])];
+  const movedCard: Card = {
+    ...activeCard,
+    columnId: targetColumnId,
+  };
+
+  if (overMeta.type === "card" && overMeta.cardId) {
+    const targetIndex = targetCards.findIndex((card) => card.id === overMeta.cardId);
+    if (targetIndex >= 0) {
+      targetCards.splice(targetIndex, 0, movedCard);
+    } else {
+      targetCards.push(movedCard);
+    }
+  } else {
+    targetCards.push(movedCard);
+  }
+
+  grouped.set(targetColumnId, targetCards);
+
+  const nextCards = board.columns.flatMap((column) => grouped.get(column.id) ?? []);
+
+  return {
+    ...board,
+    cards: nextCards,
+  };
+}
+
+function toReorderPayload(cards: Card[]): ReorderCardPosition[] {
+  return cards.map((card) => ({ id: card.id, columnId: card.columnId }));
+}
+
 export function BoardClient({ initialBoard }: BoardClientProps) {
   const [board, setBoard] = useState(initialBoard);
   const [draft, setDraft] = useState<DraftCard>(emptyDraft);
   const [selectedCard, setSelectedCard] = useState<Card | null>(null);
+  const [activeCard, setActiveCard] = useState<Card | null>(null);
   const [isSaving, setIsSaving] = useState(false);
   const [statusMessage, setStatusMessage] = useState(
-    "Board ready. New cards auto-commit and push when git origin is configured."
+    "Board ready. Drag cards between stages and new cards auto-sync to git."
+  );
+
+  const sensors = useSensors(
+    useSensor(PointerSensor, {
+      activationConstraint: {
+        distance: 8,
+      },
+    })
   );
 
   const columnsById = useMemo(
@@ -67,9 +161,13 @@ export function BoardClient({ initialBoard }: BoardClientProps) {
       return;
     }
 
-    setBoard(payload.board as BoardData);
+    const nextBoard = payload.board as BoardData;
+    setBoard(nextBoard);
     setDraft({ ...emptyDraft, columnId: draft.columnId });
     setStatusMessage(payload.git?.message ?? "Card created.");
+    setSelectedCard((current) =>
+      current ? nextBoard.cards.find((card) => card.id === current.id) ?? current : current
+    );
     setIsSaving(false);
   }
 
@@ -91,14 +189,44 @@ export function BoardClient({ initialBoard }: BoardClientProps) {
       return;
     }
 
-    setBoard(payload.board as BoardData);
+    const nextBoard = payload.board as BoardData;
+    setBoard(nextBoard);
     setSelectedCard((current) =>
-      current && current.id === cardId
-        ? ((payload.card as Card | undefined) ?? current)
-        : current
+      current ? nextBoard.cards.find((card) => card.id === current.id) ?? current : current
     );
     setStatusMessage(payload.git?.message ?? "Card updated.");
     setIsSaving(false);
+  }
+
+  async function saveCardOrder(nextBoard: BoardData, movedCardId: string) {
+    setIsSaving(true);
+    setStatusMessage("Saving drag-and-drop changes…");
+
+    const response = await fetch("/api/board/reorder", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        cards: toReorderPayload(nextBoard.cards),
+        movedCardId,
+      }),
+    });
+
+    const payload = await response.json();
+
+    if (!response.ok) {
+      setStatusMessage(payload.error ?? "Unable to reorder cards.");
+      setIsSaving(false);
+      return false;
+    }
+
+    const savedBoard = payload.board as BoardData;
+    setBoard(savedBoard);
+    setSelectedCard((current) =>
+      current ? savedBoard.cards.find((card) => card.id === current.id) ?? current : current
+    );
+    setStatusMessage(payload.git?.message ?? "Cards reordered.");
+    setIsSaving(false);
+    return true;
   }
 
   async function removeCard(cardId: string) {
@@ -121,6 +249,54 @@ export function BoardClient({ initialBoard }: BoardClientProps) {
     setSelectedCard(null);
     setStatusMessage(payload.git?.message ?? "Card removed.");
     setIsSaving(false);
+  }
+
+  function handleDragStart(event: DragStartEvent) {
+    const activeId = String(event.active.id);
+    const card = board.cards.find((item) => item.id === activeId) ?? null;
+    setActiveCard(card);
+  }
+
+  async function handleDragEnd(event: DragEndEvent) {
+    setActiveCard(null);
+    const { active, over } = event;
+
+    if (!over) {
+      return;
+    }
+
+    const activeId = String(active.id);
+    const overMeta = over.data.current as DragMeta | undefined;
+
+    if (!overMeta) {
+      return;
+    }
+
+    const nextBoard = reorderBoardCards(board, activeId, overMeta);
+    const sameOrder =
+      nextBoard.cards.length === board.cards.length &&
+      nextBoard.cards.every(
+        (card, index) =>
+          card.id === board.cards[index]?.id &&
+          card.columnId === board.cards[index]?.columnId
+      );
+
+    if (sameOrder) {
+      return;
+    }
+
+    const previousBoard = board;
+    setBoard(nextBoard);
+    const ok = await saveCardOrder(nextBoard, activeId);
+
+    if (!ok) {
+      setBoard(previousBoard);
+      setSelectedCard((current) =>
+        current
+          ? previousBoard.cards.find((card) => card.id === current.id) ?? current
+          : current
+      );
+    }
   }
 
   return (
@@ -152,9 +328,7 @@ export function BoardClient({ initialBoard }: BoardClientProps) {
             />
             <MetricCard
               label="active clients"
-              value={String(
-                board.cards.filter((card) => card.columnId === "active-clients").length
-              )}
+              value={String(getCardsForColumn(board, "active-clients").length)}
               helper="Current delivery workload"
             />
           </div>
@@ -177,7 +351,7 @@ export function BoardClient({ initialBoard }: BoardClientProps) {
             <Input label="Task / opportunity" value={draft.title} onChange={(value) => setDraft((current) => ({ ...current, title: value }))} />
             <Input label="Company / client" value={draft.company} onChange={(value) => setDraft((current) => ({ ...current, company: value }))} />
             <Input label="Contact" value={draft.contact} onChange={(value) => setDraft((current) => ({ ...current, contact: value }))} />
-            <Input label="Value" value={draft.value} onChange={(value) => setDraft((current) => ({ ...current, value: value }))} placeholder="$2,000/mo" />
+            <Input label="Value" value={draft.value} onChange={(value) => setDraft((current) => ({ ...current, value }))} placeholder="$2,000/mo" />
             <SelectField
               label="Priority"
               value={draft.priority}
@@ -226,22 +400,28 @@ export function BoardClient({ initialBoard }: BoardClientProps) {
         </form>
       </section>
 
-      <section className="grid gap-4 xl:grid-cols-6">
-        {board.columns.map((column) => {
-          const cards = board.cards.filter((card) => card.columnId === column.id);
+      <DndContext sensors={sensors} onDragStart={handleDragStart} onDragEnd={handleDragEnd}>
+        <section className="grid gap-4 xl:grid-cols-6">
+          {board.columns.map((column) => {
+            const cards = getCardsForColumn(board, column.id);
 
-          return (
-            <ColumnCard
-              key={column.id}
-              column={column}
-              cards={cards}
-              allColumns={board.columns}
-              onMove={updateCard}
-              onSelect={setSelectedCard}
-            />
-          );
-        })}
-      </section>
+            return (
+              <ColumnLane
+                key={column.id}
+                column={column}
+                cards={cards}
+                allColumns={board.columns}
+                onMove={updateCard}
+                onSelect={setSelectedCard}
+              />
+            );
+          })}
+        </section>
+
+        <DragOverlay>
+          {activeCard ? <CardPreview card={activeCard} /> : null}
+        </DragOverlay>
+      </DndContext>
 
       {selectedCard ? (
         <section className="rounded-[28px] border border-white/10 bg-slate-950/80 p-6 shadow-2xl shadow-black/30">
@@ -301,7 +481,7 @@ export function BoardClient({ initialBoard }: BoardClientProps) {
   );
 }
 
-type ColumnCardProps = {
+type ColumnLaneProps = {
   column: Column;
   cards: Card[];
   allColumns: Column[];
@@ -309,11 +489,24 @@ type ColumnCardProps = {
   onSelect: (card: Card) => void;
 };
 
-function ColumnCard({ column, cards, allColumns, onMove, onSelect }: ColumnCardProps) {
-  const currentIndex = allColumns.findIndex((item) => item.id === column.id);
+function ColumnLane({ column, cards, allColumns, onMove, onSelect }: ColumnLaneProps) {
+  const { setNodeRef, isOver } = useDroppable({
+    id: column.id,
+    data: {
+      type: "column",
+      columnId: column.id,
+    } satisfies DragMeta,
+  });
 
   return (
-    <article className="flex min-h-[420px] flex-col rounded-[28px] border border-white/10 bg-slate-950/70 p-4 shadow-xl shadow-black/20">
+    <article
+      ref={setNodeRef}
+      className={`flex min-h-[440px] flex-col rounded-[28px] border p-4 shadow-xl shadow-black/20 transition ${
+        isOver
+          ? "border-cyan-400/60 bg-slate-900/90"
+          : "border-white/10 bg-slate-950/70"
+      }`}
+    >
       <div className="mb-4 flex items-start justify-between gap-3">
         <div>
           <h3 className="text-lg font-semibold text-white">{column.title}</h3>
@@ -324,67 +517,136 @@ function ColumnCard({ column, cards, allColumns, onMove, onSelect }: ColumnCardP
         </span>
       </div>
 
-      <div className="flex flex-1 flex-col gap-3">
-        {cards.length === 0 ? (
-          <div className="flex flex-1 items-center justify-center rounded-3xl border border-dashed border-white/10 px-4 text-center text-sm text-slate-500">
-            No cards in this stage yet.
-          </div>
-        ) : null}
+      <SortableContext items={cards.map((card) => card.id)} strategy={rectSortingStrategy}>
+        <div className="flex flex-1 flex-col gap-3">
+          {cards.length === 0 ? (
+            <div className="flex flex-1 items-center justify-center rounded-3xl border border-dashed border-white/10 px-4 text-center text-sm text-slate-500">
+              Drop a card here.
+            </div>
+          ) : null}
 
-        {cards.map((card) => (
+          {cards.map((card) => (
+            <SortableCard
+              key={card.id}
+              card={card}
+              allColumns={allColumns}
+              onMove={onMove}
+              onSelect={onSelect}
+            />
+          ))}
+        </div>
+      </SortableContext>
+    </article>
+  );
+}
+
+type SortableCardProps = {
+  card: Card;
+  allColumns: Column[];
+  onMove: (cardId: string, updates: Partial<CreateCardInput>) => Promise<void>;
+  onSelect: (card: Card) => void;
+};
+
+function SortableCard({ card, allColumns, onMove, onSelect }: SortableCardProps) {
+  const { attributes, listeners, setNodeRef, transform, transition, isDragging } =
+    useSortable({
+      id: card.id,
+      data: {
+        type: "card",
+        cardId: card.id,
+        columnId: card.columnId,
+      } satisfies DragMeta,
+    });
+
+  const style = {
+    transform: CSS.Transform.toString(transform),
+    transition,
+  };
+
+  const currentIndex = allColumns.findIndex((item) => item.id === card.columnId);
+
+  return (
+    <article
+      ref={setNodeRef}
+      style={style}
+      className={`rounded-[24px] border border-white/10 bg-slate-900/90 p-4 text-left transition ${
+        isDragging ? "opacity-50 shadow-2xl shadow-cyan-950/40" : "hover:border-cyan-400/40"
+      }`}
+    >
+      <div
+        {...attributes}
+        {...listeners}
+        className="cursor-grab active:cursor-grabbing"
+      >
+        <div className="mb-3 flex items-center justify-between gap-3">
+          <span className={`rounded-full px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.25em] ${priorityClasses[card.priority]}`}>
+            {card.priority}
+          </span>
+          <span className="text-xs text-slate-500">{formatDate(card.updatedAt)}</span>
+        </div>
+        <h4 className="text-base font-semibold text-white">{card.title}</h4>
+        <p className="mt-1 text-sm text-cyan-100">{card.company}</p>
+        <p className="mt-2 line-clamp-3 text-sm leading-6 text-slate-400">{card.notes}</p>
+        <div className="mt-4 flex items-center justify-between gap-3 text-xs text-slate-400">
+          <span>{card.contact}</span>
+          <span>{card.value || "No value yet"}</span>
+        </div>
+      </div>
+
+      <div className="mt-4 flex items-center justify-between gap-2">
+        <button
+          type="button"
+          onClick={() => onSelect(card)}
+          className="rounded-full border border-white/10 px-3 py-2 text-xs font-semibold text-slate-200 transition hover:border-white/30"
+        >
+          Details
+        </button>
+        <div className="flex items-center gap-2">
           <button
             type="button"
-            key={card.id}
-            onClick={() => onSelect(card)}
-            className="rounded-[24px] border border-white/10 bg-slate-900/90 p-4 text-left transition hover:border-cyan-400/40 hover:bg-slate-900"
+            disabled={currentIndex === 0}
+            onClick={() => {
+              const previous = allColumns[currentIndex - 1];
+              if (previous) {
+                void onMove(card.id, { columnId: previous.id });
+              }
+            }}
+            className="rounded-full border border-white/10 px-3 py-2 text-xs font-semibold text-slate-200 transition hover:border-white/30 disabled:opacity-30"
           >
-            <div className="mb-3 flex items-center justify-between gap-3">
-              <span className={`rounded-full px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.25em] ${priorityClasses[card.priority]}`}>
-                {card.priority}
-              </span>
-              <span className="text-xs text-slate-500">{formatDate(card.updatedAt)}</span>
-            </div>
-            <h4 className="text-base font-semibold text-white">{card.title}</h4>
-            <p className="mt-1 text-sm text-cyan-100">{card.company}</p>
-            <p className="mt-2 line-clamp-3 text-sm leading-6 text-slate-400">{card.notes}</p>
-            <div className="mt-4 flex items-center justify-between gap-3 text-xs text-slate-400">
-              <span>{card.contact}</span>
-              <span>{card.value || "No value yet"}</span>
-            </div>
-            <div className="mt-4 flex items-center justify-between gap-2">
-              <button
-                type="button"
-                disabled={currentIndex === 0}
-                onClick={(event) => {
-                  event.stopPropagation();
-                  const previous = allColumns[currentIndex - 1];
-                  if (previous) {
-                    void onMove(card.id, { columnId: previous.id });
-                  }
-                }}
-                className="rounded-full border border-white/10 px-3 py-2 text-xs font-semibold text-slate-200 transition hover:border-white/30 disabled:opacity-30"
-              >
-                ← Back
-              </button>
-              <button
-                type="button"
-                disabled={currentIndex === allColumns.length - 1}
-                onClick={(event) => {
-                  event.stopPropagation();
-                  const next = allColumns[currentIndex + 1];
-                  if (next) {
-                    void onMove(card.id, { columnId: next.id });
-                  }
-                }}
-                className="rounded-full border border-cyan-400/30 bg-cyan-400/10 px-3 py-2 text-xs font-semibold text-cyan-100 transition hover:bg-cyan-400/20 disabled:opacity-30"
-              >
-                Forward →
-              </button>
-            </div>
+            ← Back
           </button>
-        ))}
+          <button
+            type="button"
+            disabled={currentIndex === allColumns.length - 1}
+            onClick={() => {
+              const next = allColumns[currentIndex + 1];
+              if (next) {
+                void onMove(card.id, { columnId: next.id });
+              }
+            }}
+            className="rounded-full border border-cyan-400/30 bg-cyan-400/10 px-3 py-2 text-xs font-semibold text-cyan-100 transition hover:bg-cyan-400/20 disabled:opacity-30"
+          >
+            Forward →
+          </button>
+        </div>
       </div>
     </article>
+  );
+}
+
+function CardPreview({ card }: { card: Card }) {
+  return (
+    <div className="w-[280px] rounded-[24px] border border-cyan-400/40 bg-slate-900/95 p-4 shadow-2xl shadow-cyan-950/30">
+      <div className="mb-3 flex items-center justify-between gap-3">
+        <span className={`rounded-full px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.25em] ${priorityClasses[card.priority]}`}>
+          {card.priority}
+        </span>
+        <span className="text-xs text-slate-500">{formatDate(card.updatedAt)}</span>
+      </div>
+      <h4 className="text-base font-semibold text-white">{card.title}</h4>
+      <p className="mt-1 text-sm text-cyan-100">{card.company}</p>
+      <p className="mt-2 line-clamp-3 text-sm leading-6 text-slate-400">{card.notes}</p>
+    </div>
   );
 }
 
