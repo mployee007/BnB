@@ -1,5 +1,6 @@
-import { promisify } from "node:util";
+import { getCloudflareContext } from "@opennextjs/cloudflare";
 import { execFile as execFileCallback } from "node:child_process";
+import { promisify } from "node:util";
 
 const execFile = promisify(execFileCallback);
 
@@ -7,6 +8,21 @@ async function git(args: string[]) {
   return execFile("git", ["-C", process.cwd(), ...args], {
     env: { ...process.env, GIT_TERMINAL_PROMPT: "0" },
   });
+}
+
+async function isCloudflareRuntime() {
+  try {
+    const { env } = await getCloudflareContext({ async: true });
+    const runtimeEnv = env as {
+      CF_ACCOUNT_ID?: string;
+      BOARD?: unknown;
+      ASSETS?: unknown;
+    };
+
+    return Boolean(runtimeEnv.CF_ACCOUNT_ID || runtimeEnv.BOARD || runtimeEnv.ASSETS);
+  } catch {
+    return false;
+  }
 }
 
 async function hasOriginRemote() {
@@ -19,6 +35,15 @@ async function hasOriginRemote() {
 }
 
 export async function commitAndPushBoard(changeSummary: string) {
+  if (await isCloudflareRuntime()) {
+    return {
+      committed: false,
+      pushed: false,
+      message:
+        "Board saved to Cloudflare KV. Git auto-push runs only in the local Node deployment.",
+    };
+  }
+
   await git(["add", "data/board.json"]);
 
   try {

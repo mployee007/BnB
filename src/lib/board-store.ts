@@ -1,6 +1,9 @@
 import { promises as fs } from "node:fs";
 import path from "node:path";
 
+import { getCloudflareContext } from "@opennextjs/cloudflare";
+
+import { defaultBoard } from "@/lib/default-board";
 import type {
   BoardData,
   Card,
@@ -10,6 +13,35 @@ import type {
 } from "@/lib/types";
 
 const boardPath = path.join(process.cwd(), "data", "board.json");
+const boardKey = "board";
+
+type BoardKvBinding = {
+  get(key: string, type: "text"): Promise<string | null>;
+  put(key: string, value: string): Promise<void>;
+};
+
+type BoardStorage =
+  | { kind: "kv"; kv: BoardKvBinding }
+  | { kind: "file"; path: string };
+
+function cloneDefaultBoard(): BoardData {
+  return structuredClone(defaultBoard);
+}
+
+async function getBoardStorage(): Promise<BoardStorage> {
+  try {
+    const { env } = await getCloudflareContext({ async: true });
+    const board = (env as { BOARD?: BoardKvBinding }).BOARD;
+
+    if (board) {
+      return { kind: "kv", kv: board };
+    }
+  } catch {
+    // Local Node execution falls back to the filesystem.
+  }
+
+  return { kind: "file", path: boardPath };
+}
 
 function cleanText(value: string) {
   return value.trim();
@@ -21,13 +53,54 @@ function validateRequired(value: string, field: string) {
   }
 }
 
-export async function readBoard(): Promise<BoardData> {
-  const raw = await fs.readFile(boardPath, "utf8");
+function parseBoard(raw: string | null): BoardData {
+  if (!raw) {
+    return cloneDefaultBoard();
+  }
+
   return JSON.parse(raw) as BoardData;
 }
 
+export async function readBoard(): Promise<BoardData> {
+  const storage = await getBoardStorage();
+
+  if (storage.kind === "kv") {
+    const raw = await storage.kv.get(boardKey, "text");
+
+    if (!raw) {
+      const seeded = cloneDefaultBoard();
+      await storage.kv.put(boardKey, JSON.stringify(seeded));
+      return seeded;
+    }
+
+    return parseBoard(raw);
+  }
+
+  try {
+    const raw = await fs.readFile(/* turbopackIgnore: true */ storage.path, "utf8");
+    return parseBoard(raw);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+      const seeded = cloneDefaultBoard();
+      await fs.mkdir(path.dirname(storage.path), { recursive: true });
+      await fs.writeFile(storage.path, `${JSON.stringify(seeded, null, 2)}\n`, "utf8");
+      return seeded;
+    }
+
+    throw error;
+  }
+}
+
 async function writeBoard(board: BoardData) {
-  await fs.writeFile(boardPath, `${JSON.stringify(board, null, 2)}\n`, "utf8");
+  const storage = await getBoardStorage();
+
+  if (storage.kind === "kv") {
+    await storage.kv.put(boardKey, JSON.stringify(board));
+    return;
+  }
+
+  await fs.mkdir(path.dirname(storage.path), { recursive: true });
+  await fs.writeFile(storage.path, `${JSON.stringify(board, null, 2)}\n`, "utf8");
 }
 
 export async function createCard(input: CreateCardInput) {

@@ -1,0 +1,23 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "bnb",
+  "main": ".open-next/worker.js",
+  "compatibility_date": "2026-08-19",
+  "compatibility_flags": ["nodejs_compat", "global_fetch_strictly_public"],
+  "assets": {
+    "directory": ".open-next/assets",
+    "binding": "ASSETS"
+  },
+  "services": [
+    {
+      "binding": "WORKER_SELF_REFERENCE",
+      "service": "bnb"
+    }
+  ],
+  "kv_namespaces": [
+    {
+      "binding": "BOARD",
+      "id": "b0c035681c0a49f5b9def4cbc7b0776f"
+    }
+  ]
+}
