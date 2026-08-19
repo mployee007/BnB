@@ -16,7 +16,7 @@ import {
   useSortable,
 } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 
 import type {
   BoardData,
@@ -126,7 +126,7 @@ export function BoardClient({ initialBoard }: BoardClientProps) {
   const [activeCard, setActiveCard] = useState<Card | null>(null);
   const [isSaving, setIsSaving] = useState(false);
   const [statusMessage, setStatusMessage] = useState(
-    "Board ready. Drag cards between stages and new cards auto-sync to git."
+    "Board ready. Drag cards between stages. Live site changes save to Cloudflare KV; local mode also syncs git."
   );
 
   const sensors = useSensors(
@@ -141,6 +141,19 @@ export function BoardClient({ initialBoard }: BoardClientProps) {
     () => new Map(board.columns.map((column) => [column.id, column])),
     [board.columns]
   );
+
+  useEffect(() => {
+    if (!selectedCard) {
+      return;
+    }
+
+    const previousOverflow = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+
+    return () => {
+      document.body.style.overflow = previousOverflow;
+    };
+  }, [selectedCard]);
 
   async function createCard(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -339,7 +352,7 @@ export function BoardClient({ initialBoard }: BoardClientProps) {
             <div>
               <h2 className="text-lg font-semibold text-white">Add a new card</h2>
               <p className="text-sm text-slate-400">
-                Every board change writes to <code>data/board.json</code> and syncs git.
+                Every board change is persisted. The live site saves to Cloudflare KV, and local mode writes <code>data/board.json</code> and syncs git.
               </p>
             </div>
             <div className="rounded-full border border-white/10 px-3 py-1 text-xs font-medium text-slate-300">
@@ -424,58 +437,87 @@ export function BoardClient({ initialBoard }: BoardClientProps) {
       </DndContext>
 
       {selectedCard ? (
-        <section className="rounded-[28px] border border-white/10 bg-slate-950/80 p-6 shadow-2xl shadow-black/30">
-          <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
-            <div className="space-y-3">
-              <div className="flex flex-wrap items-center gap-3">
-                <span className={`rounded-full px-3 py-1 text-xs font-semibold uppercase tracking-[0.25em] ${priorityClasses[selectedCard.priority]}`}>
-                  {selectedCard.priority} priority
-                </span>
-                <span className="text-sm text-slate-400">
-                  In {columnsById.get(selectedCard.columnId)?.title ?? "Unknown column"}
-                </span>
-              </div>
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/80 px-4 py-6 backdrop-blur-sm"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="card-details-title"
+          onClick={() => setSelectedCard(null)}
+        >
+          <section
+            className="max-h-[90vh] w-full max-w-5xl overflow-y-auto rounded-[28px] border border-white/10 bg-slate-950/95 p-6 shadow-2xl shadow-black/40"
+            onClick={(event) => event.stopPropagation()}
+          >
+            <div className="mb-5 flex items-center justify-between gap-3">
               <div>
-                <h2 className="text-2xl font-semibold text-white">{selectedCard.title}</h2>
-                <p className="text-slate-300">{selectedCard.company}</p>
+                <p className="text-xs font-semibold uppercase tracking-[0.3em] text-cyan-200">
+                  Card details
+                </p>
+                <p className="mt-1 text-sm text-slate-400">
+                  Review notes, move the card, update priority, or delete it.
+                </p>
               </div>
-              <div className="grid gap-3 sm:grid-cols-3">
-                <InfoPill label="contact" value={selectedCard.contact} />
-                <InfoPill label="value" value={selectedCard.value || "—"} />
-                <InfoPill label="updated" value={formatDate(selectedCard.updatedAt)} />
-              </div>
-              <p className="max-w-3xl whitespace-pre-wrap text-sm leading-7 text-slate-300">
-                {selectedCard.notes || "No notes yet."}
-              </p>
-            </div>
-
-            <div className="flex flex-col gap-3 lg:w-80">
-              <SelectField
-                label="Move card"
-                value={selectedCard.columnId}
-                onChange={(value) => updateCard(selectedCard.id, { columnId: value })}
-                options={board.columns.map((column) => ({ value: column.id, label: column.title }))}
-              />
-              <SelectField
-                label="Priority"
-                value={selectedCard.priority}
-                onChange={(value) => updateCard(selectedCard.id, { priority: value as Priority })}
-                options={[
-                  { value: "high", label: "High" },
-                  { value: "medium", label: "Medium" },
-                  { value: "low", label: "Low" },
-                ]}
-              />
               <button
                 type="button"
-                onClick={() => removeCard(selectedCard.id)}
-                className="rounded-full border border-rose-500/40 bg-rose-500/10 px-4 py-3 text-sm font-semibold text-rose-100 transition hover:bg-rose-500/20"
+                onClick={() => setSelectedCard(null)}
+                className="rounded-full border border-white/10 px-4 py-2 text-sm font-semibold text-slate-200 transition hover:border-white/30"
               >
-                Delete card
+                Close
               </button>
             </div>
-          </div>
-        </section>
+
+            <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+              <div className="space-y-3">
+                <div className="flex flex-wrap items-center gap-3">
+                  <span className={`rounded-full px-3 py-1 text-xs font-semibold uppercase tracking-[0.25em] ${priorityClasses[selectedCard.priority]}`}>
+                    {selectedCard.priority} priority
+                  </span>
+                  <span className="text-sm text-slate-400">
+                    In {columnsById.get(selectedCard.columnId)?.title ?? "Unknown column"}
+                  </span>
+                </div>
+                <div>
+                  <h2 id="card-details-title" className="text-2xl font-semibold text-white">{selectedCard.title}</h2>
+                  <p className="text-slate-300">{selectedCard.company}</p>
+                </div>
+                <div className="grid gap-3 sm:grid-cols-3">
+                  <InfoPill label="contact" value={selectedCard.contact} />
+                  <InfoPill label="value" value={selectedCard.value || "—"} />
+                  <InfoPill label="updated" value={formatDate(selectedCard.updatedAt)} />
+                </div>
+                <p className="max-w-3xl whitespace-pre-wrap text-sm leading-7 text-slate-300">
+                  {selectedCard.notes || "No notes yet."}
+                </p>
+              </div>
+
+              <div className="flex flex-col gap-3 lg:w-80">
+                <SelectField
+                  label="Move card"
+                  value={selectedCard.columnId}
+                  onChange={(value) => updateCard(selectedCard.id, { columnId: value })}
+                  options={board.columns.map((column) => ({ value: column.id, label: column.title }))}
+                />
+                <SelectField
+                  label="Priority"
+                  value={selectedCard.priority}
+                  onChange={(value) => updateCard(selectedCard.id, { priority: value as Priority })}
+                  options={[
+                    { value: "high", label: "High" },
+                    { value: "medium", label: "Medium" },
+                    { value: "low", label: "Low" },
+                  ]}
+                />
+                <button
+                  type="button"
+                  onClick={() => removeCard(selectedCard.id)}
+                  className="rounded-full border border-rose-500/40 bg-rose-500/10 px-4 py-3 text-sm font-semibold text-rose-100 transition hover:bg-rose-500/20"
+                >
+                  Delete card
+                </button>
+              </div>
+            </div>
+          </section>
+        </div>
       ) : null}
     </div>
   );
@@ -593,14 +635,20 @@ function SortableCard({ card, allColumns, onMove, onSelect }: SortableCardProps)
         </div>
       </div>
 
-      <div className="mt-4 flex items-center justify-between gap-2">
-        <button
-          type="button"
-          onClick={() => onSelect(card)}
-          className="rounded-full border border-white/10 px-3 py-2 text-xs font-semibold text-slate-200 transition hover:border-white/30"
-        >
-          Details
-        </button>
+      <div className="mt-4 flex items-start justify-between gap-2">
+        <details className="group max-w-[15rem] rounded-2xl border border-white/10 bg-slate-950/60 px-3 py-2 text-xs text-slate-200">
+          <summary className="cursor-pointer list-none font-semibold">
+            <span className="group-open:hidden">Details</span>
+            <span className="hidden group-open:inline">Hide details</span>
+          </summary>
+          <div className="mt-3 space-y-2 text-left text-xs leading-5 text-slate-300">
+            <p><span className="font-semibold text-white">Company:</span> {card.company}</p>
+            <p><span className="font-semibold text-white">Contact:</span> {card.contact}</p>
+            <p><span className="font-semibold text-white">Value:</span> {card.value || "—"}</p>
+            <p><span className="font-semibold text-white">Updated:</span> {formatDate(card.updatedAt)}</p>
+            <p className="whitespace-pre-wrap"><span className="font-semibold text-white">Notes:</span> {card.notes || "No notes yet."}</p>
+          </div>
+        </details>
         <div className="flex items-center gap-2">
           <button
             type="button"
